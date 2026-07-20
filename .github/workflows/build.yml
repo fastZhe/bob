@@ -49,7 +49,7 @@ jobs:
 
           cp "$EXE" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
           chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
-          cp Sources/Translate/Resources/Info.plist "${APP_DIR}/Contents/Info.plist"
+          cp Info/Info.plist "${APP_DIR}/Contents/Info.plist"
 
           # 嵌入 SPM 资源包（.build 里的 .bundle）
           SPM_BUNDLE=$(find "$BIN_PATH" -maxdepth 2 -name "*.bundle" | head -1 || true)

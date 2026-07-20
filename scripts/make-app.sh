@@ -52,7 +52,7 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 cp "$EXE" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
-cp Sources/Translate/Resources/Info.plist "$APP_BUNDLE/Contents/Info.plist"
+cp Info/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
 # SPM 资源包（.bundle）会编译到 .build/... 下面，要找一下
 SPM_BUNDLE=$(find "$BIN_PATH" -name "*.bundle" -maxdepth 2 2>/dev/null | head -1)

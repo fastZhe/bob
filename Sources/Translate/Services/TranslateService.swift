@@ -92,7 +92,7 @@ actor TranslateService {
                 "content": [
                     ["type": "text",      "text": userText] as [String: Any],
                     ["type": "image_url", "image_url": ["url": "data:image/png;base64,\(b64)"]] as [String: Any],
-                ] as [String: Any],
+                ] as [[String: Any]],
             ])
         } else {
             let userText = "请把以下文本翻译成 \(displayName(req.targetLang))。**只输出译文本身**，不要任何解释、引号或前缀。保留原始的换行和格式。\n\n---\n\(req.text)\n---"

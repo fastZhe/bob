@@ -99,10 +99,10 @@ translate/
 │   ├── Utilities/
 │   │   ├── FloatingPanel.swift        # 自定义 NSPanel（圆角磨砂）
 │   │   └── Logger.swift               # os.Logger
-│   └── Resources/
-│       └── Info.plist
-└── scripts/
-    └── make-app.sh                    # 打包 .app 脚本
+└── Info/
+    └── Info.plist                     # .app bundle metadata（SwiftPM 不处理）
+scripts/
+└── make-app.sh                        # 打包 .app 脚本
 ```
 
 ## 已知限制

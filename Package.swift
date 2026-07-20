@@ -20,9 +20,6 @@ let package = Package(
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts")
             ],
             path: "Sources/Translate",
-            resources: [
-                .process("Resources")
-            ],
             linkerSettings: [
                 // Carbon 用于 RegisterEventHotKey
                 .linkedFramework("Carbon")
