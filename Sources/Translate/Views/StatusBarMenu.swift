@@ -2,7 +2,8 @@ import SwiftUI
 
 /// 菜单栏下拉菜单
 struct StatusBarMenu: View {
-    @EnvironmentObject var coordinator: AppCoordinator
+    /// 直接传 coordinator，不依赖 EnvironmentObject（MenuBarExtra .menu 样式对 EnvironmentObject 兼容性差）
+    let coordinator: AppCoordinator
 
     var body: some View {
         Button {
@@ -10,21 +11,18 @@ struct StatusBarMenu: View {
         } label: {
             Label("翻译选中文本", systemImage: "character.cursor.ibeam")
         }
-        .keyboardShortcut("d", modifiers: [.command, .option, .control])
 
         Button {
             coordinator.translateScreenshotNow()
         } label: {
             Label("截图翻译", systemImage: "camera.viewfinder")
         }
-        .keyboardShortcut("s", modifiers: [.command, .option, .shift])
 
         Button {
             coordinator.translateClipboardNow()
         } label: {
             Label("剪贴板翻译", systemImage: "doc.on.clipboard")
         }
-        .keyboardShortcut("v", modifiers: [.command, .option, .control])
 
         Divider()
 
@@ -33,7 +31,6 @@ struct StatusBarMenu: View {
         } label: {
             Label("设置…", systemImage: "gearshape")
         }
-        .keyboardShortcut(",", modifiers: .command)
 
         Divider()
 
@@ -48,6 +45,5 @@ struct StatusBarMenu: View {
         } label: {
             Label("退出", systemImage: "power")
         }
-        .keyboardShortcut("q", modifiers: .command)
     }
 }

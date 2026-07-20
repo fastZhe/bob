@@ -6,17 +6,12 @@ struct TranslateApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            StatusBarMenu()
-                .environmentObject(coordinator)
+            StatusBarMenu(coordinator: coordinator)
                 .task { coordinator.bootstrap() }
         } label: {
             Image(systemName: "character.bubble.fill")
         }
         .menuBarExtraStyle(.menu)
-
-        Settings {
-            PreferencesView(settings: coordinator.settings)
-                .environmentObject(coordinator)
-        }
+        // 不依赖 SwiftUI Settings scene（MenuBarExtra .menu 下 sendAction 不可靠）
     }
 }

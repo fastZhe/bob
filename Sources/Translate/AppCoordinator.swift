@@ -103,13 +103,39 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: - 设置
 
+    private var settingsWindow: NSWindow?
+
     func openPreferences() {
-        if #available(macOS 14, *) {
-            // 触发 Settings 场景
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        } else {
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        // 不依赖 SwiftUI Settings scene（MenuBarExtra .menu 下 sendAction 不可靠）
+        // 自己管理一个 NSWindow
+        if let win = settingsWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            win.makeKeyAndOrderFront(nil)
+            return
         }
+        let view = PreferencesView(settings: settings)
+            .environmentObject(self)
+        let host = NSHostingController(rootView: view)
+        let win = NSWindow(contentViewController: host)
+        win.title = "Translate 设置"
+        win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        win.setContentSize(NSSize(width: 600, height: 480))
+        win.center()
+        win.isReleasedWhenClosed = false
+        // 关闭时只是隐藏，不销毁
+        let closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: win,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.settingsWindow = nil
+            }
+        }
+        _ = closeObserver
+        settingsWindow = win
+        NSApp.activate(ignoringOtherApps: true)
+        win.makeKeyAndOrderFront(nil)
     }
 
     // MARK: - 权限
