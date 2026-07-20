@@ -22,8 +22,10 @@ final class AppCoordinator: ObservableObject {
     @Published var statusMessage: String?
     @Published var errorMessage: String?
 
-    @Published var hasAccessibilityPermission = false
-    @Published var hasScreenCapturePermission = false
+    /// 三态：nil = 未检测，true = 已授权，false = 已知未授权
+    @Published var hasAccessibilityPermission: Bool? = nil
+    /// 三态：nil = 未检测，true = 已授权，false = 已知未授权
+    @Published var hasScreenCapturePermission: Bool? = nil
 
     // MARK: - 服务
 
@@ -42,17 +44,13 @@ final class AppCoordinator: ObservableObject {
         hotKey.onScreenshot = { [weak self] in self?.translateScreenshotNow() }
         hotKey.onClipboard  = { [weak self] in self?.translateClipboardNow() }
         hotKey.install()
-        // 注意：refreshPermissions() 不能在这里调 —— ad-hoc 签名 + init 阶段调 AXIsProcessTrustedWithOptions
-        // 会导致 SIGSEGV（在 CFGetTypeID 处）。延后到 .task / .onAppear 里调。
+        // 注意：不能调 AXIsProcessTrustedWithOptions —— ad-hoc 签名下必崩 SIGSEGV
+        // 也不要自动检测屏幕录制权限 —— 让用户通过功能失败来发现
     }
 
-    /// 在 SwiftUI scene 已构建后调用一次。Scene 出现后调一次。
+    /// 在 SwiftUI scene 已构建后调用一次（保留供将来扩展，目前不做事）
     func bootstrap() {
-        Task { @MainActor in
-            // 等 SwiftUI 完全挂载（避免 init 阶段触发 AX API crash）
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            self.refreshPermissions()
-        }
+        // 留空：自动权限检测在 ad-hoc 签名下不安全
     }
 
     // MARK: - 三种入口 action
@@ -116,30 +114,37 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: - 权限
 
+    /// 检测当前权限状态（**不调 AXIsProcessTrustedWithOptions**）。
+    /// 屏幕录制权限用 SCShareableContent 探测，**不会 crash**（未授权时 throw）。
+    /// 辅助功能权限用"试一次 ⌘C 模拟"探测（不调 AX API）。
     func refreshPermissions() {
-        hasAccessibilityPermission = Accessibility.isTrusted(prompt: false)
-        hasScreenCapturePermission = ScreenCapture.hasPermission()
-    }
-
-    func requestAccessibilityPermission() {
-        _ = Accessibility.isTrusted(prompt: true)
-        // 用户在系统设置里改完回来再刷新
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.refreshPermissions()
+        Task { @MainActor in
+            self.hasScreenCapturePermission = await ScreenCapture.probePermission()
+            self.hasAccessibilityPermission = await self.probeAccessibilityPermission()
         }
     }
 
+    /// 打开系统设置到辅助功能授权页
+    func requestAccessibilityPermission() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// 打开系统设置到屏幕录制授权页
     func requestScreenCapturePermission() {
-        ScreenCapture.requestPermission()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.refreshPermissions()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
         }
     }
 
     @discardableResult
     private func ensurePermissionsForSelection() -> Bool {
-        if !hasAccessibilityPermission {
-            showError("需要「辅助功能」权限才能翻译选中文本。\n请到 设置 → 隐私与安全性 → 辅助功能 授权。")
+        // 不预先用 AXIsProcessTrustedWithOptions 探测（ad-hoc 签名会崩）。
+        // 让 simulateCopy 试一下：失败时给用户清晰的提示。
+        if hasAccessibilityPermission == false {
+            // 已经探测过且失败，让用户去授权
+            showError("需要「辅助功能」权限才能翻译选中文本。\n请到 设置 → 隐私与安全性 → 辅助功能 授权。\n\n授权后请重新打开本 App。")
             requestAccessibilityPermission()
             return false
         }
@@ -148,8 +153,8 @@ final class AppCoordinator: ObservableObject {
 
     @discardableResult
     private func ensurePermissionsForScreenshot() -> Bool {
-        if !hasScreenCapturePermission {
-            showError("需要「屏幕录制」权限才能截图翻译。\n请到 设置 → 隐私与安全性 → 屏幕录制 授权。")
+        if hasScreenCapturePermission == false {
+            showError("需要「屏幕录制」权限才能截图翻译。\n请到 设置 → 隐私与安全性 → 屏幕录制 授权。\n\n授权后请重新打开本 App。")
             requestScreenCapturePermission()
             return false
         }
@@ -322,45 +327,51 @@ final class AppCoordinator: ObservableObject {
 
 // MARK: - 权限工具
 
-private enum Accessibility {
-    static func isTrusted(prompt: Bool) -> Bool {
-        let options: [String: Any] = prompt ? [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] : [:]
-        return AXIsProcessTrustedWithOptions(options as CFDictionary)
+extension AppCoordinator {
+    /// 探测辅助功能权限：不调 AXIsProcessTrustedWithOptions（ad-hoc 签名会 crash）。
+    /// 改用尝试模拟 ⌘C 并恢复原剪贴板的副作用探测法。
+    fileprivate func probeAccessibilityPermission() async -> Bool {
+        let pb = NSPasteboard.general
+        let oldChangeCount = pb.changeCount
+        let oldContents: String? = pb.string(forType: .string)
+        let oldImageData: Data? = pb.data(forType: .tiff)
+
+        let src = CGEventSource(stateID: .hidSystemState)
+        guard let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: true),
+              let keyUp   = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: false) else {
+            return false
+        }
+        keyDown.flags = .maskCommand
+        keyUp.flags   = .maskCommand
+        keyDown.post(tap: .cghidEventTap)
+        usleep(20_000)
+        keyUp.post(tap: .cghidEventTap)
+
+        // 等待剪贴板更新
+        let deadline = Date().addingTimeInterval(0.15)
+        while pb.changeCount == oldChangeCount, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let changed = pb.changeCount != oldChangeCount
+
+        // 恢复原剪贴板
+        pb.clearContents()
+        if let s = oldContents { pb.setString(s, forType: .string) }
+        if let img = oldImageData { pb.setData(img, forType: .tiff) }
+        _ = oldImageData
+
+        return changed
     }
 }
 
 private enum ScreenCapture {
-    /// 主动触发一次截屏来让 macOS 弹出权限对话框
-    static func requestPermission() {
-        Task {
-            do {
-                _ = try await ScreenshotService().captureFullScreen()
-            } catch {
-                Log.screen.info("triggered permission dialog: \(error.localizedDescription, privacy: .public)")
-            }
+    /// 用 SCShareableContent 探测：未授权时 throw（不会 crash）
+    static func probePermission() async -> Bool {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            return !content.displays.isEmpty
+        } catch {
+            return false
         }
     }
-
-    /// 推断：能拿到 display 就算有权限（粗略）
-    static func hasPermission() -> Bool {
-        let box = BoolBox(false)
-        let sem = DispatchSemaphore(value: 0)
-        Task.detached {
-            defer { sem.signal() }
-            do {
-                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                box.value = !content.displays.isEmpty
-            } catch {
-                box.value = false
-            }
-        }
-        _ = sem.wait(timeout: .now() + 1.0)
-        return box.value
-    }
-}
-
-/// 简单可变的 Bool 容器，用于跨并发闭包传递值。
-private final class BoolBox: @unchecked Sendable {
-    var value: Bool
-    init(_ v: Bool) { self.value = v }
 }

@@ -86,41 +86,73 @@ struct PreferencesView: View {
             Section("权限") {
                 permissionRow(
                     "辅助功能",
-                    granted: coordinator.hasAccessibilityPermission,
+                    status: coordinator.hasAccessibilityPermission,
                     request: { coordinator.requestAccessibilityPermission() },
-                    help: "选中文本翻译依赖此权限，监听鼠标抬起后模拟 ⌘C 抓取选区。"
+                    help: "选中文本翻译依赖此权限。未授权时，选中文字后按快捷键会显示「未检测到选中文本」。"
                 )
                 permissionRow(
                     "屏幕录制",
-                    granted: coordinator.hasScreenCapturePermission,
+                    status: coordinator.hasScreenCapturePermission,
                     request: { coordinator.requestScreenCapturePermission() },
-                    help: "截图翻译依赖此权限。"
+                    help: "截图翻译依赖此权限。未授权时，截图会提示权限错误。"
                 )
+                Button {
+                    coordinator.refreshPermissions()
+                } label: {
+                    Label("重新检测", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                Text("提示：因为本 App 走 ad-hoc 签名，无法像 App Store 应用一样自动判断权限状态。点「去授权」会打开系统设置，授权后回到此处点「重新检测」验证。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
     }
 
-    private func permissionRow(_ name: String, granted: Bool, request: @escaping () -> Void, help: String) -> some View {
+    @ViewBuilder
+    private func permissionRow(_ name: String, status: Bool?, request: @escaping () -> Void, help: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundColor(granted ? .green : .orange)
+            Image(systemName: statusIcon(status))
+                .foregroundColor(statusColor(status))
                 .imageScale(.large)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(name).font(.system(size: 13, weight: .semibold))
-                    Text(granted ? "已授权" : "未授权")
+                    Text(statusText(status))
                         .font(.caption)
-                        .foregroundColor(granted ? .green : .orange)
+                        .foregroundColor(statusColor(status))
                 }
                 Text(help).font(.caption).foregroundColor(.secondary)
             }
             Spacer()
-            if !granted {
-                Button("去授权") { request() }
-            }
+            Button("去授权") { request() }
         }
         .padding(.vertical, 4)
+    }
+
+    private func statusIcon(_ status: Bool?) -> String {
+        switch status {
+        case .some(true):  return "checkmark.circle.fill"
+        case .some(false): return "xmark.circle.fill"
+        case .none:        return "questionmark.circle.fill"
+        }
+    }
+
+    private func statusColor(_ status: Bool?) -> Color {
+        switch status {
+        case .some(true):  return .green
+        case .some(false): return .orange
+        case .none:        return .secondary
+        }
+    }
+
+    private func statusText(_ status: Bool?) -> String {
+        switch status {
+        case .some(true):  return "已授权"
+        case .some(false): return "未授权"
+        case .none:        return "未检测"
+        }
     }
 
     // MARK: - 截图翻译
