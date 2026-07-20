@@ -15,6 +15,7 @@ struct PreferencesView: View {
         }
         .frame(width: 580, height: 460)
         .padding(8)
+        .onAppear { coordinator.refreshPermissions() }
     }
 
     // MARK: - 通用

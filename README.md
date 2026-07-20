@@ -112,6 +112,23 @@ scripts/
 - SwiftUI 在 NSPanel/hudWindow 上有少量边界 bug（如部分透明度），已用 NSVisualEffectView 兜底
 - 暂时没有翻译历史（待办）
 
+## Troubleshooting
+
+### 启动后菜单栏看不到图标 / 双击没反应
+
+查 crash log：
+```bash
+ls -lt ~/Library/Logs/DiagnosticReports/Translate*.ips | head -1 | xargs cat
+```
+
+**已知 crash 1**：`EXC_BAD_ACCESS` 落在 `AXIsProcessTrustedWithOptions` → `CFGetTypeID`
+- **原因**：ad-hoc 签名的 app 在 `init` 阶段调 `AXIsProcessTrustedWithOptions` 会 SIGSEGV（系统框架在未完全初始化时访问 nil 类型）
+- **修法**：把权限查询延后到 SwiftUI scene 已挂载后（用 `.task` / `.onAppear` 触发）
+
+**已知 crash 2**：app 启动后立刻消失
+- 检查：菜单栏右上角有没有气泡图标？没有 = 启动崩溃了，看 crash log
+- 看 Console.app → 搜 "Translate"
+
 ## License
 
 MIT

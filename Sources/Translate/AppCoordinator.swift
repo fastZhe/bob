@@ -42,7 +42,17 @@ final class AppCoordinator: ObservableObject {
         hotKey.onScreenshot = { [weak self] in self?.translateScreenshotNow() }
         hotKey.onClipboard  = { [weak self] in self?.translateClipboardNow() }
         hotKey.install()
-        refreshPermissions()
+        // 注意：refreshPermissions() 不能在这里调 —— ad-hoc 签名 + init 阶段调 AXIsProcessTrustedWithOptions
+        // 会导致 SIGSEGV（在 CFGetTypeID 处）。延后到 .task / .onAppear 里调。
+    }
+
+    /// 在 SwiftUI scene 已构建后调用一次。Scene 出现后调一次。
+    func bootstrap() {
+        Task { @MainActor in
+            // 等 SwiftUI 完全挂载（避免 init 阶段触发 AX API crash）
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            self.refreshPermissions()
+        }
     }
 
     // MARK: - 三种入口 action

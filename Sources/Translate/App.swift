@@ -8,6 +8,7 @@ struct TranslateApp: App {
         MenuBarExtra {
             StatusBarMenu()
                 .environmentObject(coordinator)
+                .task { coordinator.bootstrap() }
         } label: {
             Image(systemName: "character.bubble.fill")
         }
