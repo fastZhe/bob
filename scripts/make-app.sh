@@ -56,11 +56,13 @@ cp Info/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
 # SPM 资源包（.bundle）会编译到 .build/... 下面，要找一下
 # 包括 KeyboardShortcuts 的本地化 bundle（.lproj 资源），没有它 Recorder 会触发 NSBundle.module 断言失败
+# 关键：accessor 用 Bundle.main.bundleURL（.app 根）拼接查找，不查 Contents/Resources，
+# 所以必须拷到 .app 根（与 Contents 同级），拷到 Contents/Resources 会 fatalError。
 SPM_BUNDLES=$(find "$BIN_PATH" -name "*.bundle" 2>/dev/null || true)
 if [[ -n "$SPM_BUNDLES" ]]; then
     while IFS= read -r b; do
         echo "    嵌入资源包: $(basename "$b")"
-        cp -R "$b" "$APP_BUNDLE/Contents/Resources/"
+        cp -R "$b" "$APP_BUNDLE/"
     done <<< "$SPM_BUNDLES"
 fi
 
@@ -68,8 +70,8 @@ fi
 echo "==> ad-hoc 签名（分步）"
 # 1) 清理所有 nested 现有签名
 find "$APP_BUNDLE" -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
-# 2) 先签 nested .bundle
-BUNDLE_LIST=$(find "$APP_BUNDLE/Contents/Resources" -name "*.bundle" 2>/dev/null || true)
+# 2) 先签 nested .bundle（位于 .app 根，与 Contents 同级）
+BUNDLE_LIST=$(find "$APP_BUNDLE" -maxdepth 1 -name "*.bundle" 2>/dev/null || true)
 if [ -n "$BUNDLE_LIST" ]; then
     while IFS= read -r b; do
         [ -z "$b" ] && continue
