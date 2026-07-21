@@ -62,14 +62,36 @@ final class AppCoordinator: ObservableObject {
         let pb = NSPasteboard.general
         let old = pb.changeCount
         simulateCopy()
-        // 等一下
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        // 重试读取：剪贴板更新可能延迟
+        tryReadSelection(pb: pb, oldChangeCount: old, retriesLeft: 5, delayMs: 100)
+    }
+
+    private func tryReadSelection(pb: NSPasteboard, oldChangeCount: Int, retriesLeft: Int, delayMs: UInt64) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(delayMs))) { [weak self] in
             guard let self = self else { return }
-            guard pb.changeCount != old, let text = pb.string(forType: .string), !text.isEmpty else {
-                self.showError("未检测到选中文本。请先选中要翻译的文字再按快捷键。")
+            if pb.changeCount != oldChangeCount, let text = pb.string(forType: .string), !text.isEmpty {
+                self.runTranslate(text: text, imageData: nil, source: .selection)
                 return
             }
-            self.runTranslate(text: text, imageData: nil, source: .selection)
+            if retriesLeft > 0 {
+                // 模拟一次没生效，再模拟一次（用户可能多按了快捷键/剪贴板延迟）
+                self.simulateCopy()
+                self.tryReadSelection(pb: pb, oldChangeCount: oldChangeCount, retriesLeft: retriesLeft - 1, delayMs: delayMs)
+            } else {
+                // fallback：剪贴板里可能有内容（用户之前 ⌘C 过）
+                if let text = pb.string(forType: .string), !text.isEmpty {
+                    self.runTranslate(text: text, imageData: nil, source: .clipboard)
+                    return
+                }
+                // 真没东西，给清晰提示
+                let hint: String
+                if self.hasAccessibilityPermission == false {
+                    hint = "请到 系统设置 → 隐私与安全性 → 辅助功能 勾选「Translate」。"
+                } else {
+                    hint = "1) 确保已选中要翻译的文字\n2) 试一下手动按 ⌘C 后再按本快捷键\n3) 部分 app（如 Electron / 浏览器 / 远程桌面）不响应模拟 ⌘C\n4) 可改用 ⌃⌥⌘V（剪贴板翻译）：先 ⌘C 再按本快捷键"
+                }
+                self.showError("未检测到选中文本。\n\n\(hint)")
+            }
         }
     }
 

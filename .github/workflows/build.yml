@@ -51,11 +51,16 @@ jobs:
           chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
           cp Info/Info.plist "${APP_DIR}/Contents/Info.plist"
 
-          # 嵌入 SPM 资源包（.build 里的 .bundle）
-          SPM_BUNDLE=$(find "$BIN_PATH" -maxdepth 2 -name "*.bundle" | head -1 || true)
-          if [ -n "$SPM_BUNDLE" ]; then
-            cp -R "$SPM_BUNDLE" "${APP_DIR}/Contents/Resources/"
-            echo "✅ 嵌入资源包: $(basename "$SPM_BUNDLE")"
+          # 嵌入 SPM 资源包（KeyboardShortcuts 的本地化 .bundle 等）
+          # Bundle.module 会在 .app/Contents/Resources/<name>_<target>.bundle 查找
+          SPM_BUNDLES=$(find "$BIN_PATH" -name "*.bundle" 2>/dev/null || true)
+          if [ -n "$SPM_BUNDLES" ]; then
+            echo "$SPM_BUNDLES" | while read -r b; do
+              echo "✅ 嵌入资源包: $(basename "$b")"
+              cp -R "$b" "${APP_DIR}/Contents/Resources/"
+            done
+          else
+            echo "⚠️  没找到 SPM 资源包"
           fi
 
           # ad-hoc 签名（避免 Gatekeeper 拦截；首次运行用户需右键"打开"）

@@ -55,10 +55,13 @@ chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp Info/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
 # SPM 资源包（.bundle）会编译到 .build/... 下面，要找一下
-SPM_BUNDLE=$(find "$BIN_PATH" -name "*.bundle" -maxdepth 2 2>/dev/null | head -1)
-if [[ -n "$SPM_BUNDLE" ]]; then
-    cp -R "$SPM_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
-    echo "    嵌入资源包: $(basename "$SPM_BUNDLE")"
+# 包括 KeyboardShortcuts 的本地化 bundle（.lproj 资源），没有它 Recorder 会触发 NSBundle.module 断言失败
+SPM_BUNDLES=$(find "$BIN_PATH" -name "*.bundle" 2>/dev/null || true)
+if [[ -n "$SPM_BUNDLES" ]]; then
+    while IFS= read -r b; do
+        echo "    嵌入资源包: $(basename "$b")"
+        cp -R "$b" "$APP_BUNDLE/Contents/Resources/"
+    done <<< "$SPM_BUNDLES"
 fi
 
 # ad-hoc 签名（避免 Gatekeeper 拦截）
