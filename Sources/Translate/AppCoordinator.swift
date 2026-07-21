@@ -40,6 +40,10 @@ final class AppCoordinator: ObservableObject {
     private var lastSource: TranslationRequest.Source = .selection
 
     private init() {
+        // 修复 CI 打包后 KeyboardShortcuts bundle 路径不匹配的问题
+        // （bundle 在 Contents/Resources/，运行时却去 Contents/ 根目录找）
+        fixKeyboardShortcutsBundlePath()
+
         hotKey.onSelection = { [weak self] in self?.translateSelectionNow() }
         hotKey.onScreenshot = { [weak self] in self?.translateScreenshotNow() }
         hotKey.onClipboard  = { [weak self] in self?.translateClipboardNow() }

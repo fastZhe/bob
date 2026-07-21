@@ -56,22 +56,22 @@ cp Info/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
 # SPM 资源包（.bundle）会编译到 .build/... 下面，要找一下
 # 包括 KeyboardShortcuts 的本地化 bundle（.lproj 资源），没有它 Recorder 会触发 NSBundle.module 断言失败
-# 关键：accessor 用 Bundle.main.bundleURL（.app 根）拼接查找，不查 Contents/Resources，
-# 所以必须拷到 .app 根（与 Contents 同级），拷到 Contents/Resources 会 fatalError。
+# 新版 Swift 工具链生成的 resource_bundle_accessor 查 Bundle.main.resourceURL
+# （即 Contents/Resources），bundle 放这里即可命中。
 SPM_BUNDLES=$(find "$BIN_PATH" -name "*.bundle" 2>/dev/null || true)
 if [[ -n "$SPM_BUNDLES" ]]; then
     while IFS= read -r b; do
         echo "    嵌入资源包: $(basename "$b")"
-        cp -R "$b" "$APP_BUNDLE/"
+        cp -R "$b" "$APP_BUNDLE/Contents/Resources/"
     done <<< "$SPM_BUNDLES"
 fi
 
-# 签名策略：先签 nested .bundle，再用 --deep 签整个 .app
+# 签名策略：先签嵌套 .bundle，再签主二进制，最后签 .app 顶层
 echo "==> ad-hoc 签名（分步）"
 # 1) 清理所有 nested 现有签名
 find "$APP_BUNDLE" -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
-# 2) 先签 .bundle（位于 .app 根，与 Contents 同级）
-BUNDLE_LIST=$(find "$APP_BUNDLE" -maxdepth 1 -name "*.bundle" 2>/dev/null || true)
+# 2) 先签 .bundle（位于 Contents/Resources）
+BUNDLE_LIST=$(find "$APP_BUNDLE/Contents/Resources" -name "*.bundle" 2>/dev/null || true)
 if [ -n "$BUNDLE_LIST" ]; then
     while IFS= read -r b; do
         [ -z "$b" ] && continue
@@ -79,8 +79,10 @@ if [ -n "$BUNDLE_LIST" ]; then
         codesign --force --sign - "$b"
     done <<< "$BUNDLE_LIST"
 fi
-# 3) 签整个 .app（--deep 会同时签主二进制，.bundle 已签好不会被破坏）
-codesign --force --deep --sign - "$APP_BUNDLE"
+# 3) 签主二进制
+codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+# 4) 签 .app 顶层
+codesign --force --sign - "$APP_BUNDLE"
 
 echo
 echo "✅ 完成: $APP_BUNDLE"

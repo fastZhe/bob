@@ -11,7 +11,7 @@ on:
 jobs:
   build:
     name: Build Translate.app
-    runs-on: macos-14  # GitHub 提供的 macOS Sonoma runner，自带 Xcode 15+
+    runs-on: macos-15  # Xcode 16+ / Swift 6 → 新版 accessor 查 Contents/Resources，bundle 放那里即可命中
 
     steps:
       - name: Checkout
@@ -52,25 +52,23 @@ jobs:
           cp Info/Info.plist "${APP_DIR}/Contents/Info.plist"
 
           # 嵌入 SPM 资源包（KeyboardShortcuts 的本地化 .bundle 等）
-          # 关键：SPM 为可执行 target 生成的 resource_bundle_accessor 在运行时
-          # 用 Bundle.main.bundleURL（即 .app 根目录）拼接 "<name>.bundle" 来查找，
-          # 不查 Contents/Resources。所以必须把 .bundle 放到 .app 根（与 Contents 同级），
-          # 否则点开「设置-快捷键」时 Recorder 初始化触发 Bundle.module fatalError（SIGTRAP）。
+          # macos-15 的 Swift 6 生成的 resource_bundle_accessor 会查
+          # Bundle.main.resourceURL（即 Contents/Resources），bundle 放这里即可命中。
           SPM_BUNDLES=$(find "$BIN_PATH" -name "*.bundle" 2>/dev/null || true)
           if [ -n "$SPM_BUNDLES" ]; then
             echo "$SPM_BUNDLES" | while read -r b; do
               echo "✅ 嵌入资源包: $(basename "$b")"
-              cp -R "$b" "${APP_DIR}/"
+              cp -R "$b" "${APP_DIR}/Contents/Resources/"
             done
           else
             echo "⚠️  没找到 SPM 资源包"
           fi
 
-          # 签名策略：先签 nested .bundle，再用 --deep 签整个 .app
+          # 签名策略：先签嵌套 .bundle，再签主二进制，最后签 .app 顶层
           # 1) 清理所有 nested 现有签名
           find "${APP_DIR}" -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
-          # 2) 先签 .bundle（位于 .app 根，与 Contents 同级）
-          BUNDLE_LIST=$(find "${APP_DIR}" -maxdepth 1 -name "*.bundle" 2>/dev/null || true)
+          # 2) 先签 .bundle（位于 Contents/Resources）
+          BUNDLE_LIST=$(find "${APP_DIR}/Contents/Resources" -name "*.bundle" 2>/dev/null || true)
           if [ -n "$BUNDLE_LIST" ]; then
             while IFS= read -r b; do
               [ -z "$b" ] && continue
@@ -78,11 +76,13 @@ jobs:
               codesign --force --sign - "$b"
             done <<< "$BUNDLE_LIST"
           fi
-          # 3) 签整个 .app（--deep 会同时签主二进制，.bundle 已签好不会被破坏）
-          codesign --force --deep --sign - "${APP_DIR}"
-          # 5) 验证 bundle 在 .app 根（accessor 查找路径）
-          echo "---- 验证 Bundle.module（bundle 应在 .app 根）----"
-          ls -la "${APP_DIR}/" | grep -i bundle || echo "⚠️  .app 根下没有 .bundle"
+          # 3) 签主二进制
+          codesign --force --sign - "${APP_DIR}/Contents/MacOS/Translate"
+          # 4) 签 .app 顶层
+          codesign --force --sign - "${APP_DIR}"
+          # 5) 验证 bundle
+          echo "---- 验证 Bundle.module ----"
+          ls -la "${APP_DIR}/Contents/Resources/" | head -10
 
           # 校验
           echo "---- .app 内容 ----"
