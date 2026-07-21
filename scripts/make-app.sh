@@ -90,22 +90,24 @@ if [[ -n "$SPM_BUNDLES" ]]; then
     done <<< "$SPM_BUNDLES"
 fi
 
-# 签名策略：先签嵌套 .bundle，再签主二进制，最后签 .app 顶层
+# 签名策略：ad-hoc，从内到外
 echo "==> ad-hoc 签名（分步）"
-# 1) 清理所有 nested 现有签名
+# 1) 清理所有 nested 现有签名（包括 SPM resource bundle 自带的）
 find "$APP_BUNDLE" -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
-# 2) 先签 .bundle（位于 Contents/Resources）
-BUNDLE_LIST=$(find "$APP_BUNDLE/Contents/Resources" -name "*.bundle" 2>/dev/null || true)
-if [ -n "$BUNDLE_LIST" ]; then
-    while IFS= read -r b; do
-        [ -z "$b" ] && continue
-        echo "    签名 bundle: $(basename "$b")"
-        codesign --force --sign - "$b"
-    done <<< "$BUNDLE_LIST"
-fi
-# 3) 签主二进制
+#
+# ⚠️ 注意：SPM 的 resource bundle（KeyboardShortcuts_KeyboardShortcuts.bundle）
+# 是【扁平结构】——Info.plist 直接在 .bundle/ 根下，没有 Contents/ 子目录。
+# 如果对它单独跑 `codesign --force --sign -`，codesign 会按「macOS bundle」
+# 规则去期待 Contents/Info.plist，把扁平结构签坏 → 运行时 Bundle(path:) 加载
+# 失败返回 nil → KeyboardShortcuts 的 NSBundle.module 断言 → 启动即崩
+# (EXC_BREAKPOINT/SIGTRAP)。
+#
+# 因此这些扁平 resource bundle 不能单独签名，当作普通资源目录，随主 app 顶层
+# 签名一起封印即可（顶层 codesign 会递归 seal 所有嵌套资源）。
+#
+# 2) 签主二进制
 codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
-# 4) 签 .app 顶层
+# 3) 签 .app 顶层（会封印 Resources/ 下所有资源，含扁平 .bundle）
 codesign --force --sign - "$APP_BUNDLE"
 
 echo
