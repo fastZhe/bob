@@ -64,9 +64,23 @@ if [[ -n "$SPM_BUNDLES" ]]; then
     done <<< "$SPM_BUNDLES"
 fi
 
-# ad-hoc 签名（避免 Gatekeeper 拦截）
-echo "==> ad-hoc 签名"
-codesign --force --sign - "$APP_BUNDLE" 2>&1 | head -5 || true
+# 签名策略：不使用 --deep（会破坏 nested SPM .bundle 的 _CodeSignature 和 Info.plist）
+echo "==> ad-hoc 签名（分步）"
+# 1) 清理所有 nested 现有签名
+find "$APP_BUNDLE" -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
+# 2) 先签 nested .bundle
+BUNDLE_LIST=$(find "$APP_BUNDLE/Contents/Resources" -name "*.bundle" 2>/dev/null || true)
+if [ -n "$BUNDLE_LIST" ]; then
+    while IFS= read -r b; do
+        [ -z "$b" ] && continue
+        echo "    签名 bundle: $(basename "$b")"
+        codesign --force --sign - "$b"
+    done <<< "$BUNDLE_LIST"
+fi
+# 3) 签主二进制
+codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+# 4) 最后签 .app 顶层（不带 --deep）
+codesign --force --sign - "$APP_BUNDLE"
 
 echo
 echo "✅ 完成: $APP_BUNDLE"
