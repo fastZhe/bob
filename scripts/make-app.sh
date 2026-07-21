@@ -72,11 +72,21 @@ if [[ -n "$SPM_BUNDLES" ]]; then
         # 在 Contents/ 下建相对 symlink 指向 Resources/<bundle>
         # 这样无论 app 被拖到哪个目录，链接都不会断
         local_name=$(basename "$b")
-        link_path="$APP_BUNDLE/Contents/$local_name"
-        if [[ ! -e "$link_path" ]]; then
-            ln -s "Resources/$local_name" "$link_path"
-            echo "    建相对 symlink: Contents/$local_name -> Resources/$local_name"
-        fi
+        # SPM resource_bundle_accessor 的查找基准目录不确定（可能是
+        # Bundle.main.bundleURL=Contents/，也可能是可执行文件所在 Contents/MacOS/，
+        # 取决于 Swift 工具链版本）。在两个目录下都建相对 symlink 覆盖两种情况。
+        # 相对路径以各自所在目录为基准解析，app 被拖到任意位置都不会断。
+        for base_dir in "$APP_BUNDLE/Contents" "$APP_BUNDLE/Contents/MacOS"; do
+            link_path="$base_dir/$local_name"
+            if [[ ! -e "$link_path" ]]; then
+                if [[ "$base_dir" == *"/MacOS" ]]; then
+                    ln -s "../Resources/$local_name" "$link_path"
+                else
+                    ln -s "Resources/$local_name" "$link_path"
+                fi
+                echo "    建相对 symlink: ${link_path#$APP_BUNDLE/} -> Resources/$local_name"
+            fi
+        done
     done <<< "$SPM_BUNDLES"
 fi
 
