@@ -22,10 +22,15 @@ func fixKeyboardShortcutsBundlePath() {
     // 如果 Resources 下存在该 bundle，而根目录下没有
     if fileManager.fileExists(atPath: srcBundle.path) && !fileManager.fileExists(atPath: destBundle.path) {
         do {
-            // 创建一个软链接（快捷方式），不需要复制真实文件
-            // 这样既不破坏 Contents/ 目录的签名完整性，又能让代码顺着软链接找到 Resources 里的内容
-            try fileManager.createSymbolicLink(at: destBundle, withDestinationURL: srcBundle)
-            print("✅ 成功创建 KeyboardShortcuts Bundle 软链接，绕过签名与路径限制")
+            // 用【相对路径】创建软链接（指向 Resources/...）。
+            // ⚠️ 不能用绝对路径：app 被拖到 /Applications 等其它位置后绝对路径会失效，
+            // 导致 NSBundle.module 断言失败、启动即崩。
+            // 相对路径以 destBundle 所在的 Contents/ 目录为基准解析。
+            try fileManager.createSymbolicLink(
+                atPath: destBundle.path,
+                withDestinationPath: "Resources/\(srcBundle.lastPathComponent)"
+            )
+            print("✅ 成功创建 KeyboardShortcuts Bundle 相对软链接")
         } catch {
             print("❌ 创建软链接失败: \(error)")
         }

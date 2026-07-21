@@ -58,11 +58,25 @@ cp Info/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 # 包括 KeyboardShortcuts 的本地化 bundle（.lproj 资源），没有它 Recorder 会触发 NSBundle.module 断言失败
 # 新版 Swift 工具链生成的 resource_bundle_accessor 查 Bundle.main.resourceURL
 # （即 Contents/Resources），bundle 放这里即可命中。
+#
+# ⚠️ 但 KeyboardShortcuts 的 resource_bundle_accessor 实际会在 Bundle.main.bundleURL
+# （即 Contents/）根目录下寻找 KeyboardShortcuts_KeyboardShortcuts.bundle，
+# 而不是 Contents/Resources。所以光放进 Resources 还不够，必须在 Contents/ 下
+# 建一个指向 Resources/ 的【相对】symlink（绝对路径 symlink 在 app 被移动到
+# /Applications 等其它位置后会失效，导致 NSBundle.module 断言启动即崩）。
 SPM_BUNDLES=$(find "$BIN_PATH" -name "*.bundle" 2>/dev/null || true)
 if [[ -n "$SPM_BUNDLES" ]]; then
     while IFS= read -r b; do
         echo "    嵌入资源包: $(basename "$b")"
         cp -R "$b" "$APP_BUNDLE/Contents/Resources/"
+        # 在 Contents/ 下建相对 symlink 指向 Resources/<bundle>
+        # 这样无论 app 被拖到哪个目录，链接都不会断
+        local_name=$(basename "$b")
+        link_path="$APP_BUNDLE/Contents/$local_name"
+        if [[ ! -e "$link_path" ]]; then
+            ln -s "Resources/$local_name" "$link_path"
+            echo "    建相对 symlink: Contents/$local_name -> Resources/$local_name"
+        fi
     done <<< "$SPM_BUNDLES"
 fi
 
