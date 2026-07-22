@@ -21,6 +21,8 @@ final class AppCoordinator: ObservableObject {
     @Published var isWorking = false
     @Published var statusMessage: String?
     @Published var errorMessage: String?
+    /// 结果悬浮窗是否置顶
+    @Published var resultPanelPinned = false
 
     /// 三态：nil = 未检测，true = 已授权，false = 已知未授权
     @Published var hasAccessibilityPermission: Bool? = nil
@@ -38,6 +40,9 @@ final class AppCoordinator: ObservableObject {
     private var resultPanel: FloatingPanelController<AnyView>?
     private var workingTask: Task<Void, Never>?
     private var lastSource: TranslationRequest.Source = .selection
+    /// 截图选区控制器：必须持有，否则 onResult 闭包里的 weak self 在选区完成前
+    /// 就随 controller 释放，导致 overlay 窗口 orderOut 不执行、画面卡在灰色选区态。
+    private var screenshotOverlay: ScreenshotOverlayController?
 
     private init() {
         // 修复 CI 打包后 KeyboardShortcuts bundle 路径不匹配的问题
@@ -102,20 +107,43 @@ final class AppCoordinator: ObservableObject {
     /// 截图翻译
     func translateScreenshotNow() {
         guard ensurePermissionsForScreenshot() else { return }
+        // 不提前显示结果面板：先全屏截图 + 弹选区框，
+        // 截图/选区失败时不要留一个空面板。
         statusMessage = "请框选截图区域…"
         isWorking = true
-        showResultPanel()
 
-        ScreenshotOverlayController().start(screenshot: screenshot) { [weak self] image in
-            guard let self = self else { return }
-            guard let image = image else {
+        let overlay = ScreenshotOverlayController()
+        screenshotOverlay = overlay
+        overlay.start(
+            screenshot: screenshot,
+            onResult: { [weak self] image in
+                guard let self = self else { return }
+                // 选区流程结束，释放 overlay（其内部已 orderOut 窗口）
+                self.screenshotOverlay = nil
+                guard let image = image else {
+                    // 用户取消选区
+                    self.isWorking = false
+                    self.statusMessage = nil
+                    return
+                }
+                self.processScreenshot(image)
+            },
+            onError: { [weak self] error in
+                guard let self = self else { return }
+                self.screenshotOverlay = nil
                 self.isWorking = false
                 self.statusMessage = nil
-                self.dismissResultPanel()
-                return
+                // 截屏失败绝大多数是屏幕录制权限问题，主动引导授权
+                if let captureError = error as? ScreenshotService.CaptureError,
+                   case .permissionDenied = captureError {
+                    self.hasScreenCapturePermission = false
+                    self.showError("需要「屏幕录制」权限才能截图翻译。\n请到 系统设置 → 隐私与安全性 → 屏幕录制 勾选「Translate」，授权后重新触发本功能。")
+                    self.requestScreenCapturePermission()
+                } else {
+                    self.showError("截图失败：\(error.localizedDescription)")
+                }
             }
-            self.processScreenshot(image)
-        }
+        )
     }
 
     /// 翻译剪贴板内容
@@ -192,11 +220,10 @@ final class AppCoordinator: ObservableObject {
 
     @discardableResult
     private func ensurePermissionsForSelection() -> Bool {
-        // 不预先用 AXIsProcessTrustedWithOptions 探测（ad-hoc 签名会崩）。
-        // 让 simulateCopy 试一下：失败时给用户清晰的提示。
-        if hasAccessibilityPermission == false {
-            // 已经探测过且失败，让用户去授权
-            showError("需要「辅助功能」权限才能翻译选中文本。\n请到 设置 → 隐私与安全性 → 辅助功能 授权。\n\n授权后请重新打开本 App。")
+        // 不预探测拦截（副作用探测法会误报 false，导致已授权用户每次都被弹窗）。
+        // 直接放行让 simulateCopy 真正执行，失败时由 tryReadSelection 给出提示。
+        if AXIsProcessTrusted() == false {
+            showError("需要「辅助功能」权限才能翻译选中文本。\n请到 设置 → 隐私与安全性 → 辅助功能 勾选「Translate」。\n\n授权后请重新打开本 App。")
             requestAccessibilityPermission()
             return false
         }
@@ -205,11 +232,8 @@ final class AppCoordinator: ObservableObject {
 
     @discardableResult
     private func ensurePermissionsForScreenshot() -> Bool {
-        if hasScreenCapturePermission == false {
-            showError("需要「屏幕录制」权限才能截图翻译。\n请到 设置 → 隐私与安全性 → 屏幕录制 授权。\n\n授权后请重新打开本 App。")
-            requestScreenCapturePermission()
-            return false
-        }
+        // 不依赖屏幕录制预探测（SCShareableContent 枚举在某些情况下即使已授权也会 throw，
+        // 误报 false 后每次都弹设置）。直接放行，截图失败时再按 permissionDenied 分支引导。
         return true
     }
 
@@ -341,7 +365,8 @@ final class AppCoordinator: ObservableObject {
         }
         resultPanel?.show(
             { AnyView(ResultPanelView(coordinator: self)) },
-            size: NSSize(width: 440, height: 260)
+            size: NSSize(width: 440, height: 160),
+            pinned: resultPanelPinned
         )
     }
 
@@ -349,12 +374,20 @@ final class AppCoordinator: ObservableObject {
         guard let panel = resultPanel else { return }
         panel.show(
             { AnyView(ResultPanelView(coordinator: self)) },
-            size: NSSize(width: 440, height: 260)
+            size: NSSize(width: 440, height: 160),
+            pinned: resultPanelPinned,
+            keepPinned: true
         )
     }
 
     func dismissResultPanel() {
         resultPanel?.close()
+    }
+
+    /// 切换结果悬浮窗置顶
+    func toggleResultPanelPin() {
+        resultPanelPinned.toggle()
+        resultPanel?.setPinned(resultPanelPinned)
     }
 
     // MARK: - Helpers
@@ -380,39 +413,10 @@ final class AppCoordinator: ObservableObject {
 // MARK: - 权限工具
 
 extension AppCoordinator {
-    /// 探测辅助功能权限：不调 AXIsProcessTrustedWithOptions（ad-hoc 签名会 crash）。
-    /// 改用尝试模拟 ⌘C 并恢复原剪贴板的副作用探测法。
+    /// 探测辅助功能权限：用 AXIsProcessTrusted()（无 options 版本，不发 prompt、ad-hoc 签名下安全不崩）。
+    /// 不用 AXIsProcessTrustedWithOptions（那才会崩），也不用副作用探测法（不可靠）。
     fileprivate func probeAccessibilityPermission() async -> Bool {
-        let pb = NSPasteboard.general
-        let oldChangeCount = pb.changeCount
-        let oldContents: String? = pb.string(forType: .string)
-        let oldImageData: Data? = pb.data(forType: .tiff)
-
-        let src = CGEventSource(stateID: .hidSystemState)
-        guard let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: true),
-              let keyUp   = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: false) else {
-            return false
-        }
-        keyDown.flags = .maskCommand
-        keyUp.flags   = .maskCommand
-        keyDown.post(tap: .cghidEventTap)
-        usleep(20_000)
-        keyUp.post(tap: .cghidEventTap)
-
-        // 等待剪贴板更新
-        let deadline = Date().addingTimeInterval(0.15)
-        while pb.changeCount == oldChangeCount, Date() < deadline {
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        let changed = pb.changeCount != oldChangeCount
-
-        // 恢复原剪贴板
-        pb.clearContents()
-        if let s = oldContents { pb.setString(s, forType: .string) }
-        if let img = oldImageData { pb.setData(img, forType: .tiff) }
-        _ = oldImageData
-
-        return changed
+        return AXIsProcessTrusted()
     }
 }
 

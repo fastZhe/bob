@@ -102,7 +102,7 @@ struct PreferencesView: View {
                     Label("重新检测", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
-                Text("提示：因为本 App 走 ad-hoc 签名，无法像 App Store 应用一样自动判断权限状态。点「去授权」会打开系统设置，授权后回到此处点「重新检测」验证。")
+                Text("提示：辅助功能权限用 AXIsProcessTrusted() 探测；屏幕录制权限用 SCShareableContent 探测，未授权或偶发异常时可能误报未授权。点「去授权」打开系统设置，授权后回到此处点「重新检测」验证。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

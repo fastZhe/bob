@@ -16,7 +16,8 @@ struct ResultPanelView: View {
             footer
         }
         .padding(14)
-        .frame(width: 420, height: 240)
+        .frame(width: 420)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Subviews
@@ -50,7 +51,8 @@ struct ResultPanelView: View {
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 40, maxHeight: 60)
         } else if let err = coordinator.errorMessage {
             VStack(alignment: .leading, spacing: 6) {
                 Label("出错了", systemImage: "exclamationmark.triangle.fill")
@@ -59,7 +61,7 @@ struct ResultPanelView: View {
                 Text(err)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
-                    .lineLimit(6)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else if let result = coordinator.lastResult {
@@ -82,7 +84,8 @@ struct ResultPanelView: View {
             Text("等待翻译结果…")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 40, maxHeight: 60)
         }
     }
 
@@ -121,6 +124,16 @@ struct ResultPanelView: View {
             } else {
                 Spacer()
             }
+
+            Button {
+                coordinator.toggleResultPanelPin()
+            } label: {
+                Image(systemName: coordinator.resultPanelPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(coordinator.resultPanelPinned ? "取消置顶" : "置顶（浮在最前）")
 
             Button("关闭") { coordinator.dismissResultPanel() }
                 .buttonStyle(.bordered)

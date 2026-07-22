@@ -7,28 +7,36 @@ final class ScreenshotOverlayController {
 
     private var window: NSWindow?
     private var selectionView: ScreenshotSelectionView?
+    /// 全局事件监听：兜底捕获 mouseUp / ESC，不依赖 view 是否 first responder。
+    /// 后台 LSUIElement app 的 borderless 窗口有时 mouseUp 会丢，导致选完松手没反应。
+    private var monitor: Any?
 
     /// 启动截图选区流程。
     /// 流程：截全屏 → 全屏窗口显示 → 用户框选 → 裁剪返回。
+    /// - onResult: 用户框选完成（image）或取消（nil）。
+    /// - onError: 截全屏阶段失败（通常是屏幕录制权限未授权）。
     func start(screenshot: ScreenshotService,
-               onResult: @escaping (NSImage?) -> Void) {
+               onResult: @escaping (NSImage?) -> Void,
+               onError: @escaping (Error) -> Void) {
         Task { @MainActor in
             do {
                 let full = try await screenshot.captureFullScreen()
                 self.presentOverlay(fullImage: full, onResult: onResult)
             } catch {
                 Log.screen.error("capture failed: \(error.localizedDescription, privacy: .public)")
-                onResult(nil)
+                onError(error)
             }
         }
     }
 
     private func presentOverlay(fullImage: NSImage, onResult: @escaping (NSImage?) -> Void) {
         guard let screen = NSScreen.main else { onResult(nil); return }
-        let frame = screen.frame
+        // 用 visibleFrame（排除菜单栏/Dock），避免覆盖在菜单栏上导致看起来画面错位。
+        let frame = screen.visibleFrame
 
         let view = ScreenshotSelectionView(frame: frame, image: fullImage)
         view.onSelect = { [weak self] rectInImage in
+            self?.teardown()
             self?.window?.orderOut(nil)
             self?.window = nil
             self?.selectionView = nil
@@ -36,6 +44,7 @@ final class ScreenshotOverlayController {
             onResult(cropped)
         }
         view.onCancel = { [weak self] in
+            self?.teardown()
             self?.window?.orderOut(nil)
             self?.window = nil
             self?.selectionView = nil
@@ -43,7 +52,8 @@ final class ScreenshotOverlayController {
         }
         selectionView = view
 
-        let w = NSWindow(
+        // 自定义子类：borderless 窗口默认不能成为 key，ESC/键盘事件收不到。
+        let w = KeyableBorderlessWindow(
             contentRect: frame,
             styleMask: [.borderless],
             backing: .buffered,
@@ -57,9 +67,33 @@ final class ScreenshotOverlayController {
         w.acceptsMouseMovedEvents = true
         w.ignoresMouseEvents = false
         w.contentView = view
+        // 必须激活 app，否则后台菜单栏 app 的窗口收不到键盘事件（ESC 取消不了）。
+        NSApp.activate(ignoringOtherApps: true)
         w.makeKeyAndOrderFront(nil)
+        // 显式把 view 设为 first responder，确保 mouseUp / keyDown 能派发到它。
+        w.makeFirstResponder(view)
         view.hostWindow = w
         window = w
+
+        // 全局事件兜底：后台 app 的 borderless 窗口有时 mouseUp/ESC 事件会丢，
+        // 用 local monitor 兜底，确保选完松手能确认、ESC 能取消。
+        installMonitor()
+    }
+
+    private func installMonitor() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .keyDown]) { [weak self] event in
+            guard let self = self, self.window != nil else { return event }
+            if event.type == .leftMouseUp {
+                self.selectionView?.finishSelectionIfDragging()
+            } else if event.type == .keyDown, event.keyCode == 53 {  // ESC
+                self.selectionView?.cancel()
+            }
+            return event
+        }
+    }
+
+    private func teardown() {
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
     }
 
     /// rectInImage 用 NSImage.size 坐标（原点在左下）
@@ -80,6 +114,12 @@ final class ScreenshotOverlayController {
 }
 
 // MARK: - NSView 实现
+
+/// borderless 窗口默认 canBecomeKeyWindow=false，收不到键盘事件。
+/// 子类化让 ESC 取消能生效。
+private final class KeyableBorderlessWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+}
 
 private final class ScreenshotSelectionView: NSView {
 
@@ -202,6 +242,35 @@ private final class ScreenshotSelectionView: NSView {
 
     // MARK: - Events
 
+    /// 完成选区（mouseUp 或全局 monitor 兜底调用）。
+    /// 用 guard 防止重复触发（mouseUp 和 monitor 可能都调到）。
+    fileprivate func finishSelectionIfDragging() {
+        guard let s = startPoint, let c = currentPoint else { return }
+        // 清空起点，防止 monitor 与 mouseUp 重复触发
+        startPoint = nil
+        currentPoint = nil
+        let rect = normalizedRect(s, c)
+        if rect.width >= 5, rect.height >= 5 {
+            // 转换成 NSImage 坐标（points，原点在左下）
+            let imgRect = NSRect(
+                x: rect.origin.x,
+                y: bounds.height - rect.maxY,
+                width: rect.width,
+                height: rect.height
+            )
+            onSelect?(imgRect)
+        } else {
+            onCancel?()
+        }
+    }
+
+    /// 取消选区（ESC 或全局 monitor 兜底调用）。
+    fileprivate func cancel() {
+        startPoint = nil
+        currentPoint = nil
+        onCancel?()
+    }
+
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         startPoint = p
@@ -215,22 +284,7 @@ private final class ScreenshotSelectionView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard let s = startPoint, let c = currentPoint else { return }
-        let rect = normalizedRect(s, c)
-        if rect.width >= 5, rect.height >= 5 {
-            // 转换成 NSImage 坐标（points，原点在左下）
-            // NSView bounds 用的是 Cocoa 坐标（原点在左下），所以 rect.origin.y 是 NSView 坐标
-            // image.size.height - (rect.maxY) = 转换后 y
-            let imgRect = NSRect(
-                x: rect.origin.x,
-                y: bounds.height - rect.maxY,
-                width: rect.width,
-                height: rect.height
-            )
-            onSelect?(imgRect)
-        } else {
-            onCancel?()
-        }
+        finishSelectionIfDragging()
     }
 
     override func keyDown(with event: NSEvent) {

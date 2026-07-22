@@ -55,38 +55,36 @@ chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp Info/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
 # SPM 资源包（.bundle）会编译到 .build/... 下面，要找一下
-# 包括 KeyboardShortcuts 的本地化 bundle（.lproj 资源），没有它 Recorder 会触发 NSBundle.module 断言失败
-# 新版 Swift 工具链生成的 resource_bundle_accessor 查 Bundle.main.resourceURL
-# （即 Contents/Resources），bundle 放这里即可命中。
+# 包括 KeyboardShortcuts 的本地化 bundle（.lproj 资源），没有它 Recorder 会触发
+# NSBundle.module 断言失败（启动即崩 EXC_BREAKPOINT/SIGTRAP）。
 #
-# ⚠️ 但 KeyboardShortcuts 的 resource_bundle_accessor 实际会在 Bundle.main.bundleURL
-# （即 Contents/）根目录下寻找 KeyboardShortcuts_KeyboardShortcuts.bundle，
-# 而不是 Contents/Resources。所以光放进 Resources 还不够，必须在 Contents/ 下
-# 建一个指向 Resources/ 的【相对】symlink（绝对路径 symlink 在 app 被移动到
-# /Applications 等其它位置后会失效，导致 NSBundle.module 断言启动即崩）。
+# ⚠️ 关键：KeyboardShortcuts 的 Bundle.module（SPM resource_bundle_accessor 生成）
+# 经过反汇编 + 运行时诊断确认，它的查找逻辑是：
+#   候选1: Bundle.main.bundleURL + "<bundle>"  ← Bundle.main.bundleURL = .app 根目录!
+#   候选2: 硬编码的 .build/.../build 路径绝对路径（CI 机器才存在）
+#   两者都 nil → fatalError("could not load resource bundle...")
+# 所以 bundle 必须出现在【.app 根目录】下，而不是 Contents/ 或 Contents/Resources/。
+#
+# 但 .app 规范要求资源在 Contents/Resources/。折中方案：
+#   - 真实 bundle 放 Contents/Resources/（符合规范）
+#   - 在 .app 根目录建一个指向 Contents/Resources/<bundle> 的【相对】symlink
+#     （相对路径保证 app 被拖到 /Applications 等任意位置都不会断）
+# ad-hoc 签名下，.app 根多出 symlink 会让 codesign --verify 报
+# "unsealed contents present in the bundle root"，但不影响运行（已 open 验证）。
 SPM_BUNDLES=$(find "$BIN_PATH" -name "*.bundle" 2>/dev/null || true)
 if [[ -n "$SPM_BUNDLES" ]]; then
     while IFS= read -r b; do
-        echo "    嵌入资源包: $(basename "$b")"
-        cp -R "$b" "$APP_BUNDLE/Contents/Resources/"
-        # 在 Contents/ 下建相对 symlink 指向 Resources/<bundle>
-        # 这样无论 app 被拖到哪个目录，链接都不会断
         local_name=$(basename "$b")
-        # SPM resource_bundle_accessor 的查找基准目录不确定（可能是
-        # Bundle.main.bundleURL=Contents/，也可能是可执行文件所在 Contents/MacOS/，
-        # 取决于 Swift 工具链版本）。在两个目录下都建相对 symlink 覆盖两种情况。
-        # 相对路径以各自所在目录为基准解析，app 被拖到任意位置都不会断。
-        for base_dir in "$APP_BUNDLE/Contents" "$APP_BUNDLE/Contents/MacOS"; do
-            link_path="$base_dir/$local_name"
-            if [[ ! -e "$link_path" ]]; then
-                if [[ "$base_dir" == *"/MacOS" ]]; then
-                    ln -s "../Resources/$local_name" "$link_path"
-                else
-                    ln -s "Resources/$local_name" "$link_path"
-                fi
-                echo "    建相对 symlink: ${link_path#$APP_BUNDLE/} -> Resources/$local_name"
-            fi
-        done
+        echo "    嵌入资源包: $local_name"
+        # 1) 真实 bundle 放 Contents/Resources/
+        cp -R "$b" "$APP_BUNDLE/Contents/Resources/"
+        # 2) .app 根目录建相对 symlink -> Contents/Resources/<bundle>
+        #    （accessor 候选1会命中这个 symlink，解析到 Contents/Resources 里的真实 bundle）
+        link_path="$APP_BUNDLE/$local_name"
+        if [[ ! -e "$link_path" ]]; then
+            ln -s "Contents/Resources/$local_name" "$link_path"
+            echo "    建相对 symlink: ${link_path#$APP_BUNDLE/} -> Contents/Resources/$local_name"
+        fi
     done <<< "$SPM_BUNDLES"
 fi
 

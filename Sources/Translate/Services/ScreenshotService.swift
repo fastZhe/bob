@@ -27,7 +27,9 @@ final class ScreenshotService {
     func captureFullScreen() async throws -> NSImage {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let display = content.displays.first else { throw CaptureError.noDisplay }
+            // 优先抓 NSScreen.main 对应的显示器，避免多屏时抓错屏导致画面放大错位
+            let mainDisplayID = (NSScreen.main?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            guard let display = (mainDisplayID.flatMap { id in content.displays.first(where: { $0.displayID == id }) } ?? content.displays.first) else { throw CaptureError.noDisplay }
             return try await captureWithSCStream(display: display)
         } catch let error as CaptureError {
             throw error
@@ -57,11 +59,14 @@ final class ScreenshotService {
 
         // 等待最多 1.5s 拿一帧
         let deadline = Date().addingTimeInterval(1.5)
-        while capture.image == nil, Date() < deadline {
+        while capture.cgImage == nil, Date() < deadline {
             try? await Task.sleep(nanoseconds: 30_000_000)
         }
-        guard let image = capture.image else { throw CaptureError.noImage }
-        return image
+        guard let cgImage = capture.cgImage else { throw CaptureError.noImage }
+        // size 用逻辑点（display.width/height），让 NSImage 作为 2x retina 图，
+        // 否则按像素当点画进 view 会放大 2x。
+        let size = NSSize(width: display.width, height: display.height)
+        return NSImage(cgImage: cgImage, size: size)
     }
 
     private func captureWithCGWindowList() throws -> NSImage {
@@ -81,30 +86,22 @@ final class ScreenshotService {
 /// SCStream 的输出回调：第一帧拿到就停
 private final class StreamCapture: NSObject, SCStreamOutput {
     let lock = NSLock()
-    private var _image: NSImage?
+    private var _cgImage: CGImage?
 
-    var image: NSImage? {
+    var cgImage: CGImage? {
         lock.lock(); defer { lock.unlock() }
-        return _image
+        return _cgImage
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, _image == nil,
-              let attachments = CMCopyDictionaryOfAttachments(
-                allocator: kCFAllocatorDefault,
-                target: sampleBuffer,
-                attachmentMode: kCMAttachmentMode_ShouldPropagate
-              ) as? [CIImageOption: Any] else { return }
+        guard type == .screen, _cgImage == nil else { return }
         // 用 IOSurface 拿 CGImage
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ci = CIImage(cvPixelBuffer: pixelBuffer)
         let ctx = CIContext(options: [.useSoftwareRenderer: false])
         guard let cg = ctx.createCGImage(ci, from: ci.extent) else { return }
-        let size = NSSize(width: cg.width, height: cg.height)
-        let img = NSImage(cgImage: cg, size: size)
         lock.lock()
-        _image = img
+        _cgImage = cg
         lock.unlock()
-        _ = attachments
     }
 }
